@@ -1,6 +1,6 @@
 ethplorerWidget = {
     // Ethplorer API URL
-    api: 'https://api.ethplorer.io',
+    api: 'https://api' + ((document.location.href.indexOf("//ethplorer.io") > 0) ? '2' : '') + '.ethplorer.io',
 
     // Ethplorer URL
     url: 'https://ethplorer.io',
@@ -10,10 +10,13 @@ ethplorerWidget = {
 
     // Add Google loader for chart widgets
     addGoogleLoader: false,
+    addGoogleAPI: false,
 
     chartWidgets: [],
+    chartControlWidgets: [],
+    preloadPriceHistory: {},
 
-    cssVersion: 8,
+    cssVersion: 19,
 
     // Widget initialization
     init: function(selector, type, options, templates){
@@ -32,7 +35,11 @@ ethplorerWidget = {
             return;
         }
         if(type == 'tokenHistoryGrouped'){
-            ethplorerWidget.addGoogleLoader = true;
+            if(options && options.full) ethplorerWidget.addGoogleAPI = true;
+            else ethplorerWidget.addGoogleLoader = true;
+        }
+        if(type == 'tokenPriceHistoryGrouped' || type == 'addressPriceHistoryGrouped'){
+            ethplorerWidget.addGoogleAPI = true;
         }
         var el = $(selector);
         if(!el.length){
@@ -42,7 +49,7 @@ ethplorerWidget = {
         if('undefined' === ethplorerWidget.eventsAdded){
             $(window).resize(ethplorerWidget.fixTilda);
             ethplorerWidget.eventsAdded = true;
-        }
+        }   
         if('undefined' !== typeof(ethplorerWidget.Type[type])){
             return new ethplorerWidget.Type[type](el, options, templates);
         }else{
@@ -67,7 +74,7 @@ ethplorerWidget = {
         document.getElementsByTagName("head")[0].appendChild(linkElem);
     },
     loadGoogleCharts: function(){
-        if(google && google.charts){
+        if(('undefined' !== typeof(google)) && google && google.charts){
             google.charts.load('current', {packages: ['corechart']});
 
             if(ethplorerWidget.chartWidgets && ethplorerWidget.chartWidgets.length)
@@ -75,11 +82,116 @@ ethplorerWidget = {
                         ethplorerWidget.chartWidgets[i].load();
         }
     },
-    appendEthplorerLink: function(obj){
+    loadGoogleControlCharts: function(){
+        if(('undefined' !== typeof(google)) && google){
+            google.load('visualization', '1', {'packages': ['controls'], 'language': 'en', callback : ethplorerWidget.drawGoogleControlCharts});
+        }
+    },
+    drawGoogleControlCharts: function(reloadData, opt){
+        if(ethplorerWidget.chartControlWidgets && ethplorerWidget.chartControlWidgets.length)
+            for(var i=0; i<ethplorerWidget.chartControlWidgets.length; i++)
+                    ethplorerWidget.chartControlWidgets[i].load(reloadData, opt);
+    },
+    getGoogleControlOptions: function(dteRangeStart, dteRangeEnd, options, series, size){
+        var controlOptions = {
+            controlType: 'ChartRangeFilter',
+            containerId: 'control',
+            state: {
+                range: {
+                    start: dteRangeStart,
+                    end: dteRangeEnd
+                }
+            },
+            options: {
+                filterColumnIndex: 0,
+                ui: {
+                    chartType: 'ComboChart',
+                    minRangeSize: (size <= 7) ? 86400000 * 2 : 86400000 * 7,
+                    chartOptions: {
+                        colors: ['#65A5DF'],
+                        lineWidth: 0,
+                        hAxis : {
+                            title: '',
+                            titleTextStyle: {
+                                italic: false
+                            },
+                            slantedText: false,
+                            maxAlternation: 1,
+                            maxTextLines: 1,
+                            //format: (options.full || size > 365) ? 'yyyy' : ((size > 90) ? "MMM ''yy" : "MMM d"),
+                            format: (options.full || size > 90) ? "MMM ''yy" : "MMM d",
+                            gridlines: {
+                                color: (options.full || (size > 90)) ? '#999999' : "none",
+                                count: (options.full || size > 90) ? 6 : 6
+                            },
+                        },
+                        series: series
+                    }
+                }
+            }
+        };
+        if(options['theme'] == 'dark'){
+            controlOptions.options.ui.chartOptions.colors = ['#DEDEDE'];
+            controlOptions.options.ui.chartOptions.backgroundColor = {fill: 'transparent'};
+            controlOptions.options.ui.chartOptions.hAxis.textStyle = {color: '#DEDEDE'};
+            controlOptions.options.ui.chartOptions.hAxis.titleTextStyle.color = '#DEDEDE';
+            controlOptions.options.ui.chartOptions.hAxis.baselineColor = '#DEDEDE';
+        }
+        return controlOptions;
+    },
+    getGoogleChartAxisFormat: function(size){
+        if(size > 90) return "MMM ''yy";
+        else return "MMM d";
+    },
+    getGoogleChartAxisCount: function(size){
+        if(size > 90) return 10;
+        else return 7;
+    },
+    preloadData: function(methods){
+        for(var i=0; i<methods.length; i++){
+            var preloadMethod = methods[i];
+
+            var api = ethplorerWidget.api + '/' + preloadMethod.method,
+                address;
+            if(preloadMethod.options && preloadMethod.options.address){
+                address = preloadMethod.options.address.toString().toLowerCase();
+                api += ('/' + address);
+            }
+            var showTx = 'all';
+            try{
+                if(localStorage && (null !== localStorage.getItem('showTx'))){
+                    showTx = localStorage.getItem('showTx');
+                }
+            }catch(e){}
+            var params = {
+                apiKey: 'ethplorer.widget',
+                domain: document.location.href,
+                period: 730,
+                showTx: showTx,
+            };
+
+            $.getJSON(api, params, function(_address){
+                return function(data){
+                    if(data && !data.error && data.history){
+                        //console.log(_address);
+                        //console.log(data);
+                        ethplorerWidget.preloadPriceHistory[_address] = data;
+                    }else{
+                        console.log('Preloading: No data for chart.');
+                    }
+                };}(address)
+            );
+        }
+    },
+    appendEthplorerLink: function(obj, link, style){
         var host = ethplorerWidget.url.split('//')[1];
-        var divLink = '<div style="text-align:center;font-size:11px;padding-top:10px;padding-bottom:4px;">';
+        if(!style) style = 'text-align:center;font-size:11px;padding-top:10px;padding-bottom:4px;';
+        var divLink = '<div style="' + style + '">';
         if((document.location.host !== host) && (document.location.host.indexOf("amilabs.cc") < 0)){
-            obj.el.append(divLink + '<a class="tx-link" href="https://ethplorer.io/widgets" target="_blank">Ethplorer.io</a></a></div>');
+            if(!document.getElementById('ethpLink')){
+                if(!link) link = '<a id="ethpLink" class="tx-link" href="https://ethplorer.io/widgets" target="_blank">Ethplorer.io</a>';
+                obj.el.append(divLink + link + '</div>');
+            }
         }else if('undefined' !== typeof(obj.options.getCode) && obj.options.getCode){
             var divLink = '<div style="text-align:center;font-size:16px;padding-top:10px;padding-bottom:4px;">';
             var popupId = obj.el.attr('id') + '-code';
@@ -120,11 +232,16 @@ ethplorerWidget = {
         }
         widgetCode += ');});' + cr + '</script>';
 
-        $("#" + popupId).text(widgetCode);
-        var popupContent = $("#" + popupId).html();
-        $("#" + popupId).html(popupContent.replace(/(\n)/gm, "<br/>"));
+        if('undefined' !== typeof(widget.type) && (widget.type === 'tokenPriceHistoryGrouped' || widget.type === 'addressPriceHistoryGrouped')){
+            widgetCode = '<center><br/><b>Coming soon!</b><br\>Follow <a href="https://twitter.com/ethplorer" target="_blank">Ethplorer\'s twitter</a> to know first.</center>';
+            $("#" + popupId).html(widgetCode);
+        }else{
+            $("#" + popupId).text(widgetCode);
+            var popupContent = $("#" + popupId).html();
+            $("#" + popupId).html(popupContent.replace(/(\n)/gm, "<br/>"));
+        }
+
         $("#" + popupId).dialog('open');
-        console.log(widgetCode);
     },
     parseTemplate: function(template, data){
         var res = template;
@@ -143,12 +260,15 @@ ethplorerWidget = {
     fixPath: function(){
         if((document.location.host !== 'ethplorer.io') && (document.location.host.indexOf('ethplorer') >= 0)){
             ethplorerWidget.api = '//' + document.location.host + '/api';
-            ethplorerWidget.url = '//' + document.location.host
+            ethplorerWidget.url = '//' + document.location.host;
         }
     },
     Utils: {
         link: function(data, text, title, hash, addClass){
             title = title || text;
+            if(data === '0x0000000000000000000000000000000000000000'){
+                return '<a class="tx-link" href="#" title="' + title + '">' + text + '</a>';
+            }
             hash = hash || false;
             if((false !== hash) && hash){
                 hash = '#' + hash;
@@ -159,7 +279,11 @@ ethplorerWidget = {
             if(!addClass){
                 addClass = "";
             }
-            return '<a class="tx-link ' + addClass + '" href="' + ethplorerWidget.url + '/' + linkType + '/' + data + hash + '" title="' + title + '" target="_blank">' + text + '</a>';
+            var target = '';
+            if((document.location.host !== 'ethplorer.io') && (document.location.host.indexOf('ethplorer.io') < 0)){
+                target = ' target="_blank"';
+            }
+            return '<a class="tx-link ' + addClass + '" href="' + ethplorerWidget.url + '/' + linkType + '/' + data + hash + '" title="' + title + '" ' + target + '>' + text + '</a>';
         },
 
         // Timestamp to local date
@@ -207,7 +331,18 @@ ethplorerWidget = {
          * @param {bool} cutZeroes
          * @returns {string}
          */
-        formatNum: function(num, withDecimals /* = false */, decimals /* = 2 */, cutZeroes /* = false */){
+        formatNum: function(num, withDecimals /* = false */, decimals /* = 2 */, cutZeroes /* = false */, withPostfix /* = false */, numLimitPostfix /* = 999999 */){
+            var postfix = '';
+            if(withPostfix){
+                if(!numLimitPostfix) numLimitPostfix = 999999;
+                if(num > 999 && num <= numLimitPostfix){
+                    num = num / 1000;
+                    postfix = ' K';
+                }else if(num > numLimitPostfix){
+                    num = num / 1000000;
+                    postfix = ' M';
+                }
+            }
             function math(command, val, decimals){
                 var k = Math.pow(10, decimals ? parseInt(decimals) : 0);
                 return Math[command](val * k) / k;
@@ -221,7 +356,7 @@ ethplorerWidget = {
             }
             cutZeroes = !!cutZeroes;
             withDecimals = !!withDecimals;
-            decimals = decimals || 2;
+//            decimals = decimals || (cutZeroes ? 0 : 2);
             
             if((num.toString().indexOf("e+") > 0)){
                 return num.toString();
@@ -240,8 +375,8 @@ ethplorerWidget = {
                 num = math('round', num, decimals);
             }
             var parts = num.toString().split('.');
-            var res = parts[0].toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-            var zeroCount = cutZeroes ? 2 : decimals;
+            var res = parts[0].toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+            var zeroCount = cutZeroes ? 0 : decimals;
             if(withDecimals && decimals){
                 if(parts.length > 1){
                     res += '.';
@@ -255,7 +390,7 @@ ethplorerWidget = {
                 }
             }
             res = res.replace(/\.$/, '');
-            return res;
+            return res + postfix;
         },
         selectText: function(containerid){
             if(document.selection){
@@ -267,6 +402,25 @@ ethplorerWidget = {
                 range.selectNode(document.getElementById(containerid));
                 window.getSelection().addRange(range);
             }
+        },
+        pdiff: function(a, b, x){
+            var res = 100;
+            if(x && !b){
+                return (a > 0) ? 'x' : 0;
+            }
+            if(a !== b){
+                if(a && b){
+                    res = (a / b) * 100 - 100;
+                }else{
+                    res *= ((a - b) < 0) ? -1 : 1;
+                }
+            }else{
+                res = 0;
+            }
+            if(x && (Math.abs(res) > 10000) && (b < 10)){
+                res = 'x';
+            }
+            return res;
         }
     }
 };
@@ -321,7 +475,7 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
    
     this.refresh = function(obj){
         return function(){
-            $.getJSON(obj.api, obj.getRequestParams(obj.ts ? {timestamp: obj.ts} : false), obj.refreshWidget);
+            $.getJSON(obj.api, obj.getRequestParams(obj.ts ? {ts: obj.ts} : false), obj.refreshWidget);
         }
     }(this);
 
@@ -339,11 +493,18 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
     };
 
     this.getRequestParams = function(additionalParams){
-        var requestOptions = ['limit', 'address', 'timestamp'];
+        var requestOptions = ['limit', 'address', 'ts', 'showEth'];
         var params = {
             apiKey: 'ethplorer.widget',
             type: 'transfer',
+            domain: document.location.href,
         };
+        /*
+        if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        }
+        */
         for(var key in this.options){
             if(requestOptions.indexOf(key) >= 0){
                 params[key] = this.options[key];
@@ -381,7 +542,6 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
             if(!obj.ts){
                 return obj.cbFirstLoad(data);
             }
-            obj.el.find('tr').removeClass('hidden new');
             return obj.cbRefresh(data);
         };
     }(this);
@@ -428,7 +588,7 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
             this.ts = data.operations[0].timestamp;
             var txTable = this.el.find(".txs.big-screen-table");
             var txSmall = this.el.find(".txs.small-screen-table");
-            for(var i=0; i<data.operations.length; i++){
+            for(var i=data.operations.length - 1; i>=0; i--){
                 var rowData = this.prepareData(data.operations[i]);
                 var bigRows = $(ethplorerWidget.parseTemplate(this.templates.bigScreenTable, rowData));
                 var smallRows = $(ethplorerWidget.parseTemplate(this.templates.smallScreenTable, rowData));
@@ -439,7 +599,7 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
                 setTimeout(
                     function(el){
                         return function(){
-                            el.find('.hidden').addClass('new');
+                            el.find('.hidden').removeClass('hidden');
                         }
                     }(this.el),
                     200
@@ -474,6 +634,10 @@ ethplorerWidget.Type['tokenHistory'] = function(element, options, templates){
             tr.tokenInfo.symbol = tr.tokenInfo.name;
         }
         var k = Math.pow(10, tr.tokenInfo.decimals);
+        if(tr.isEth){
+            k = 1;
+            tr.tokenInfo = {symbol: "ETH", decimals: 18, address: '0x0000000000000000000000000000000000000000'};
+        }
         var amount = ethplorerWidget.Utils.formatNum(tr.value / k, true, parseInt(tr.tokenInfo.decimals), true);
 
         var hash = tr.priority ? tr.priority : false;
@@ -514,18 +678,35 @@ ethplorerWidget.Type['topTokens'] = function(element, options, templates){
         }
     }
 
+    var row = '<tr>' + 
+        '<td class="tx-field">%position%</td>';
+
+    var criteria = options.criteria ? options.criteria : false;
+
     this.api = ethplorerWidget.api + '/getTopTokens';
 
     this.templates = {
         header: '<div class="txs-header">Top %limit% tokens for %period% days</div>',
         loader: '<div class="txs-loading">Loading...</div>',
-        // Big table row
-        row:    '<tr>' + 
-                    '<td class="tx-field">%position%</td>' + 
-                    '<td class="tx-field">%name%</td>' +
-                    '<td class="tx-field" title="%opCount% operations">%opCount%</td>' +
-                '</tr>',
     };
+
+    switch(criteria){
+        case 'byPrice':
+            row += '<td class="tx-field">%name%</td>';
+            row = row +'<td class="tx-field" title="">%price%</td>';
+            break;
+        case 'byCurrentVolume':
+            this.templates.header = '<div class="txs-header">Top %limit% tokens</div>';
+        case 'byPeriodVolume':
+            row += '<td class="tx-field">%name_symbol%</td>';
+            row += '<td class="tx-field" title="">%volume%</td>';
+            break;
+        default:
+            row += '<td class="tx-field">%name%</td>';
+            row = row + '<td class="tx-field" title="%opCount% operations">%opCount%</td>' + '</tr>';
+    }
+    
+    this.templates.row = row;
 
     // Override default templates with custom
     if('object' === typeof(templates)){
@@ -547,10 +728,17 @@ ethplorerWidget.Type['topTokens'] = function(element, options, templates){
     };
 
     this.getRequestParams = function(additionalParams){
-        var requestOptions = ['limit', 'period'];
+        var requestOptions = ['limit', 'period', 'criteria'];
         var params = {
-            apiKey: 'freekey',
+            apiKey: 'ethplorer.widget',
+            domain: document.location.href
         };
+        /*
+        if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        }
+        */
         for(var key in this.options){
             if(requestOptions.indexOf(key) >= 0){
                 params[key] = this.options[key];
@@ -578,23 +766,416 @@ ethplorerWidget.Type['topTokens'] = function(element, options, templates){
                 }
                 txTable += '</table>';
                 obj.el.append(txTable);
-
-                ethplorerWidget.appendEthplorerLink(obj);
-
-                if('function' === typeof(obj.options.onLoad)){
-                    obj.options.onLoad();
-                }
-                setTimeout(ethplorerWidget.fixTilda, 300);
+            }else{
+                obj.el.find('.txs-loading').remove();
+                var noDataMessage = '<div id="ethpNoData">No data...<div>';
+                if(!document.getElementById('ethpNoData')) obj.el.append(noDataMessage);
             }
+            if('function' === typeof(obj.options.onLoad)){
+                obj.options.onLoad();
+            }
+            setTimeout(ethplorerWidget.fixTilda, 300);
+            ethplorerWidget.appendEthplorerLink(obj);
         };
     }(this);
 
     this.prepareData = function(data){
         var name = data.name ? data.name : data.address;
+        var symbol = data.symbol ? data.symbol : '';
         return {
             address: ethplorerWidget.Utils.link(data.address, data.address, data.address),
             name: ethplorerWidget.Utils.link(data.address, name, name, false, data.name ? "" : "tx-unknown"),
-            opCount: data.opCount
+            name_symbol: ethplorerWidget.Utils.link(data.address, name + (symbol ? ' (' + symbol + ')' : ''), name + (symbol ? ' (' + symbol + ')' : ''), false, data.name ? "" : "tx-unknown"),
+            opCount: data.opCount,
+            price: (data.price && data.price.rate) ? ('$ ' + ethplorerWidget.Utils.formatNum(data.price.rate, true, 2, true)) : '',
+            volume: data.volume ? ('$ ' + ethplorerWidget.Utils.formatNum(data.volume, true, 2, true)) : ''
+        };
+    };
+
+    this.init();
+}
+
+
+/**
+ * Top list Widget.
+ *
+ * @param {type} element
+ * @param {type} options
+ * @param {type} templates
+ * @returns {undefined}
+ */
+ethplorerWidget.Type['top'] = function(element, options, templates){
+    this.el = element;
+
+    this.options = {
+        limit: 50,
+        periods: [1, 7, 30],
+        totalPlace: 'up'
+    };
+
+    if(options){
+        for(var key in options){
+            this.options[key] = options[key];
+        }
+    }
+
+    this.cache = {};
+
+    this.options.criteria = window.location.hash.substr(1) || (options.criteria || 'cap');
+    var aCriteries = ['cap', 'trade', 'count'];
+    if(aCriteries.indexOf(this.options.criteria) < 0){
+        this.options.criteria = 'cap';
+    }
+
+    this.api = ethplorerWidget.api + '/getTop';
+
+    var marginTotalUp = 0,
+        marginTotalDown = 10;
+    if(this.options.totalPlace == 'down') marginTotalUp = marginTotalDown = 20;
+
+    this.templates = {
+        total: (this.options.total ? '<div class="widget-topTokens-totals" style="margin-top:' + marginTotalUp + 'px;margin-bottom:' + marginTotalDown + 'px;">Tokens Cap: <span class="tx-field-price">$ %cap% B</span>%capTrend% for <span class="tx-field-price">%tokens%</span> Tokens. <span class="widget-top-total-trade">Trade Vol (24h): <span class="tx-field-price">$ %volume24h%</span>%volumeTrend%</span></div>' : ''),
+        header: '<div class="txs-header">' +
+                    '<div class="widget-topTokens-tabs-row">' +
+                        '<div class="widget-topTokens-tabs-wrapper">' +
+                            '<div data-tab="cap" class="widget-topTokens-tab">' +
+                                '<a data-criteria="cap"><div class="widget-topTokens-tab-title">by Capitalization</div></a>' +
+                            '</div>' +
+                            '<div data-tab="trade" class="widget-topTokens-tab">' +
+                                '<a data-criteria="trade"><div class="widget-topTokens-tab-title">by Trade Volume</div></a>' +
+                            '</div>' +
+                            '<div data-tab="count" class="widget-topTokens-tab">' +
+                                '<a data-criteria="count"><div class="widget-topTokens-tab-title">by Operations</div></a>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="widget-topTokens-tabs-wrapper_mobile">' +
+                            '<select id="widgetTopTokensSelect" name="widgetTopTokensSelect" class="widget-topTokens-select">' +
+                                '<option value="cap">by Capitalization</option>' +
+                                '<option value="trade">by Trade Volume</option>' +
+                                '<option value="count">by Operations</option>' +
+                            '</select>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>',
+        loader: '<div class="txs-loading" style="padding-top: 0px !important;">Loading...</div>',
+        criteria: {
+            cap: {
+                rowHeader: '<tr>' +
+                    '<th class="tx-field">#</th>' +
+                    '<th class="tx-field">Token</th>' +
+                    '<th class="tx-field ewDiff tx-field-sort">Cap</th>' +
+                    '<th class="tx-field ewDiff">Price</th>' +
+                    '<th class="tx-field ewDiff">24h</th>' +
+                    '<th class="tx-field ewDiff">7d</th>' +
+                    '<th class="tx-field ewDiff">30d</th>' +
+                    '</tr>',
+                row: '<tr>' +
+                    '<td class="tx-field">%position%</td>' +
+                    '<td class="tx-field">%name_symbol%</td>' +
+                    '<td class="tx-field">%cap%</td>' +
+                    '<td class="tx-field ewDiff"><span title="%price_full%">%price%</span></td>' +
+                    '<td class="tx-field ewDiff">%trend_1d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_7d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_30d%</td>' +
+                    '</tr>',
+                rowMobile: '<tr><td class="tx-field">%position%</td><td class="tx-field" colspan="2">%name_symbol%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">Cap:</td><td class="tx-field-mob">%cap%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">Price:</td><td class="tx-field-mob ewDiff"><span title="%price_full%" class="tx-field-price">%price%</span></td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">24h:</td><td class="tx-field-mob ewDiff">%trend_1d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">7d:</td><td class="tx-field-mob ewDiff">%trend_7d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">30d:</td><td class="tx-field-mob ewDiff">%trend_30d%</td></tr>'
+            },
+            trade: {
+                rowHeader: '<tr>' +
+                    '<th class="tx-field">#</th>' +
+                    '<th class="tx-field">Token</th>' +
+                    '<th class="tx-field ewDiff">Price</th>' +
+                    '<th class="tx-field ewDiff tx-field-sort">Volume (24h)</th>' +
+                    '<th class="tx-field ewDiff">24h</th>' +
+                    '<th class="tx-field ewDiff">7d</th>' +
+                    '<th class="tx-field ewDiff">30d</th>' +
+                    '</tr>',
+                row: '<tr>' +
+                    '<td class="tx-field">%position%</td>' +
+                    '<td class="tx-field">%name_symbol%</td>' +
+                    '<td class="tx-field ewDiff"><span title="%price_full%" class="tx-field-price">%price%</span></td>' +
+                    '<td class="tx-field tx-field-sort">%volume%</td>' +
+                    '<td class="tx-field ewDiff">%trend_1d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_7d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_30d%</td>' +
+                    '</tr>',
+                rowMobile: '<tr><td class="tx-field">%position%</td><td class="tx-field" colspan="2">%name_symbol%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">Price:</td><td class="tx-field-mob ewDiff"><span title="%price_full%" class="tx-field-price">%price%</span></td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">Volume (24h):</td><td class="tx-field-mob">%volume%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">24h:</td><td class="tx-field-mob ewDiff">%trend_1d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">7d:</td><td class="tx-field-mob ewDiff">%trend_7d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">30d:</td><td class="tx-field-mob ewDiff">%trend_30d%</td></tr>'
+            },
+            count: {
+                rowHeader: '<tr>' +
+                    '<th class="tx-field">#</th>' +
+                    '<th class="tx-field">Token</th>' +
+                    '<th class="tx-field ewDiff tx-field-sort">Operations (24h)</th>' +
+                    '<th class="tx-field ewDiff">24h</th>' +
+                    '<th class="tx-field ewDiff">7d</th>' +
+                    '<th class="tx-field ewDiff">30d</th>' +
+                    '</tr>',
+                row: '<tr>' +
+                    '<td class="tx-field">%position%</td>' +
+                    '<td class="tx-field">%name_symbol%</td>' +
+                    '<td class="tx-field">%txsCount%</td>' +
+                    '<td class="tx-field ewDiff">%trend_1d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_7d%</td>' +
+                    '<td class="tx-field ewDiff">%trend_30d%</td>' +
+                    '</tr>',
+                rowMobile: '<tr><td class="tx-field">%position%</td><td class="tx-field" colspan="2">%name_symbol%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">Operations (24h):</td><td class="tx-field-mob">%txsCount%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">24h:</td><td class="tx-field-mob ewDiff">%trend_1d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">7d:</td><td class="tx-field-mob ewDiff">%trend_7d%</td></tr>' +
+                    '<tr><td></td><td class="tx-field-mob">30d:</td><td class="tx-field-mob ewDiff">%trend_30d%</td></tr>'
+            },
+        }
+    };
+
+    // Override default templates with custom
+    if('object' === typeof(templates)){
+        for(var key in templates){
+            this.templates[key] = templates[key];
+        }
+    }
+
+    this.load = function(hash){
+        if('undefined' !== typeof(this.templates.criteria[this.options.criteria])){
+            var criteriaTpl = this.templates.criteria[this.options.criteria];
+            if(criteriaTpl.header){
+                this.templates.header = criteriaTpl.header;
+            }
+            if(criteriaTpl.row){
+                this.templates.row = criteriaTpl.row;
+            }
+            if(criteriaTpl.rowMobile){
+                this.templates.rowMobile = criteriaTpl.rowMobile;
+            }
+            if(criteriaTpl.rowHeader){
+                this.templates.rowHeader = criteriaTpl.rowHeader;
+            }
+        }
+        if('undefined' === typeof(this.cache[this.options.criteria])){
+            this.el.html(ethplorerWidget.parseTemplate(this.templates.header, this.options) + this.templates.loader);        
+            $.getJSON(this.api, this.getRequestParams(), this.refreshWidget);
+        }else{
+            this.el.html(ethplorerWidget.parseTemplate(this.templates.header, this.options));
+            this.refreshWidget(this.cache[this.options.criteria]);
+        }
+        if(hash){
+            window.location.hash = this.options.criteria;
+        }
+    };
+
+    this.init = function(){
+        this.el.addClass('ethplorer-widget');
+        this.el.addClass('widget-topTokens');
+        this.el.addClass('theme-' + (this.options.theme ? this.options.theme : 'ethplorer'));
+        this.load();
+    };
+
+    this.getRequestParams = function(additionalParams){
+        var requestOptions = ['limit', 'period', 'criteria'];
+        var params = {
+            apiKey: 'ethplorer.widget',
+            domain: document.location.href
+        };
+        /*
+        if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        }
+        */
+        for(var key in this.options){
+            if(requestOptions.indexOf(key) >= 0){
+                params[key] = this.options[key];
+            }
+        }
+        if('object' === typeof(additionalParams)){
+            for(var key in additionalParams){
+                if(requestOptions.indexOf(key) >= 0){
+                    params[key] = additionalParams[key];
+                }
+            }
+        }
+        return params;
+    };
+
+    this.refreshWidget = function(obj){
+        return function(data){
+            ethplorerWidget.appendEthplorerLink(obj, 'source: <a id="ethpLink" class="tx-link" style="display:inline;" href="https://ethplorer.io/widgets" target="_blank">Ethplorer.io</a>', 'text-align:right;font-size:11px;padding-bottom:4px;padding-right:5px;margin-top:-10px;');
+            if(data && !data.error && data.tokens && data.tokens.length){
+                if('undefined' === typeof(obj.cache[obj.options.criteria])){
+                    obj.cache[obj.options.criteria] = data;
+                }
+                var totalsHtml = '';
+                if(data.totals){
+                    var cap = data.totals.cap ? (ethplorerWidget.Utils.formatNum(data.totals.cap / 1000000000, true, 1, true)) : '?';
+                    var volume24h = data.totals.volume24h ? (ethplorerWidget.Utils.formatNum(data.totals.volume24h, true, 0, true, true, 99999999)) : '?';
+
+                    var ivdiff = ethplorerWidget.Utils.pdiff(data.totals.cap, data.totals.capPrevious, true);
+                    var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+                    if('x' === ivdiff){
+                        var capTrend = '';
+                    }else{
+                        var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+                        var capTrend = ' <span class="ewDiff"><span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">(' + vdiff + ' %' + ')</span></span>';
+                    }
+
+                    var ivdiff = ethplorerWidget.Utils.pdiff(data.totals.volume24h, data.totals.volumePrevious, true);
+                    var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+                    if('x' === ivdiff){
+                        var volumeTrend = '';
+                    }else{
+                        var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+                        var volumeTrend = ' <span class="ewDiff"><span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">(' + vdiff + ' %' + ')</span></span>';
+                    }
+
+                    totalsHtml = ethplorerWidget.parseTemplate(obj.templates.total, {cap: cap, capTrend: capTrend, tokens: data.totals.tokensWithPrice, volume24h: volume24h, volumeTrend: volumeTrend});
+                }
+                obj.el.find('.txs-loading, .txs').remove();
+                if(totalsHtml && obj.options.totalPlace != 'down') obj.el.append(totalsHtml);
+                var txTable = '<table class="txs txs-top-tokens">';
+                var txMobileTable = '<table class="txs txs-top-tokens-mobile">';
+                txTable += obj.templates.rowHeader;
+                for(var i=0; i<data.tokens.length; i++){
+                    var rowData = obj.prepareData(data.tokens[i], obj.options.criteria);
+                    if(obj.options.criteria != 'count'){
+                        rowData['position'] = (i == 0) ? '' : i;
+                    }else{
+                        rowData['position'] = i+1;
+                    }
+                    txTable += ethplorerWidget.parseTemplate(obj.templates.row, rowData);
+                    txMobileTable += ethplorerWidget.parseTemplate(obj.templates.rowMobile, rowData);
+                }
+                txTable += '</table>';
+                txMobileTable += '</table>';
+                obj.el.append(txTable);
+                obj.el.append(txMobileTable);
+                if(totalsHtml && obj.options.totalPlace == 'down'){
+                    obj.el.append(totalsHtml);
+                }
+            }else{
+                obj.el.find('.txs-loading, .txs').remove();
+                var noDataMessage = '<div id="ethpNoData">No data...<div>';
+                if(!document.getElementById('ethpNoData')) obj.el.append(noDataMessage);
+            }
+
+            setTimeout(ethplorerWidget.fixTilda, 300);
+
+            obj.el.find('[data-criteria]').click(function(_obj){
+                return function(){
+                    if(!$(this).hasClass('ewSelected')){
+                        _obj.el.find('.ewSelected').removeClass('ewSelected');
+                        $(this).addClass('ewSelected');                            
+                        _obj.options.criteria = $(this).attr('data-criteria');
+                        $('#widgetTopTokensSelect').val(_obj.options.criteria);
+                        _obj.load(true);
+                    }
+                };
+            }(obj))
+            obj.el.find('.widget-topTokens-select').change(function(_obj){
+                return function(){
+                    _obj.el.find('.ewSelected').removeClass('ewSelected');
+                    _obj.options.criteria = $(this).val();
+                    $('#widgetTopTokensSelect').val(_obj.options.criteria);
+                    _obj.load(true);
+                };
+            }(obj))
+            //window.location.hash = obj.options.criteria;
+            obj.el.find('[data-criteria="' + obj.options.criteria + '"]').addClass('ewSelected');
+            obj.el.find('[data-tab="' + obj.options.criteria + '"]').removeClass('widget-topTokens-tab').addClass('widget-topTokens-tab-active');
+            $('#widgetTopTokensSelect').val(obj.options.criteria);
+
+            if('undefined' === typeof(obj.onLoadFired)){
+                if('function' === typeof(obj.options.onLoad)){
+                    obj.options.onLoad();
+                }
+                obj.onLoadFired = true;
+            }
+        };
+    }(this);
+
+    this.prepareData = function(data, criteria){
+        var name = data.name ? data.name : data.address;
+        var symbol = data.symbol ? data.symbol : '';
+
+        var data1dCurrent = data['volume-1d-current'],
+            data1dPrevious = data['volume-1d-previous'],
+            data7dCurrent = data['volume-7d-current'],
+            data7dPrevious = data['volume-7d-previous'],
+            data30dCurrent = data['volume-30d-current'],
+            data30dPrevious = data['volume-30d-previous'];
+        if(criteria == 'cap'){
+            data1dCurrent = data['cap-1d-current'],
+            data1dPrevious = data['cap-1d-previous'],
+            data7dCurrent = data['cap-7d-current'],
+            data7dPrevious = data['cap-7d-previous'],
+            data30dCurrent = data['cap-30d-current'],
+            data30dPrevious = data['cap-30d-previous'];
+        }
+        if(criteria == 'count'){
+            data1dCurrent = data['txsCount-1d-current'],
+            data1dPrevious = data['txsCount-1d-previous'],
+            data7dCurrent = data['txsCount-7d-current'],
+            data7dPrevious = data['txsCount-7d-previous'],
+            data30dCurrent = data['txsCount-30d-current'],
+            data30dPrevious = data['txsCount-30d-previous'];
+        }
+
+        // @todo: remove code duplicate and "x"s
+        var ivdiff = ethplorerWidget.Utils.pdiff(data30dCurrent, data30dPrevious, true);
+        var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+        if('x' === ivdiff){
+            var trend_30d = '--';
+        }else{
+            var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+            var trend_30d = '<span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">' + vdiff + ' %' + '</span>';
+        }
+
+        if(criteria == 'cap' && data.price && ('undefined' !== typeof(data.price.diff7d))){
+            ivdiff = data.price.diff7d;
+        }else{
+            var ivdiff = ethplorerWidget.Utils.pdiff(data7dCurrent, data7dPrevious, true);
+        }
+        if('x' === ivdiff){
+            var trend_7d = (trend_30d != '--') ? '<span class="ewDiffUp">0 %</span>' : '--';
+        }else{
+            var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+            var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+            var trend_7d = '<span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">' + vdiff + ' %' + '</span>';
+        }
+
+        if(criteria == 'cap' && data.price && ('undefined' !== typeof(data.price.diff))){
+            var ivdiff = data.price.diff;
+        }else{
+            var ivdiff = ethplorerWidget.Utils.pdiff(data1dCurrent, data1dPrevious, true);
+        }
+        if('x' === ivdiff){
+            var trend_1d = (trend_7d != '--') ? '<span class="ewDiffUp">0 %</span>' : '--';
+        }else{
+            var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+            var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+            var trend_1d = '<span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">' + vdiff + ' %' + '</span>';
+        }
+
+        return {
+            address: ethplorerWidget.Utils.link(data.address, data.address, data.address),
+            name: ethplorerWidget.Utils.link(data.address, name, name, false, data.name ? "" : "tx-unknown"),
+            name_symbol: ethplorerWidget.Utils.link(data.address, name + (symbol ? ' (' + symbol + ')' : ''), name + (symbol ? ' (' + symbol + ')' : ''), false, data.name ? "" : "tx-unknown"),
+            txsCount: data.txsCount24,
+            price_full: (data.price && data.price.rate) ? data.price.rate : '$ 0.00',
+            price: (data.price && data.price.rate) ? ((data.price.rate < 0.005 ? '>' : '') + '$ ' + ethplorerWidget.Utils.formatNum(data.price.rate, true, 2, false)) : '$ 0.00',
+            volume: data.volume ? ('$ ' + ethplorerWidget.Utils.formatNum(data.volume, true, data.volume >= 1000 ? 0 : 2, true, true, 99999999)) : '',
+            cap: data.cap ? ('$ ' + ethplorerWidget.Utils.formatNum(data.cap, true, data.cap >= 1000 ? 0 : 2, true, true, 99999999)) : '',
+            trend_1d: trend_1d,
+            trend_7d: trend_7d,
+            trend_30d: trend_30d
         };
     };
 
@@ -613,6 +1194,7 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
     this.el = element;
     this.widgetData = null;
     this.resizeTimer = null;
+    this.cachedWidth = $(window).width();
 
     this.options = {
         period: 30,
@@ -631,7 +1213,7 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
     if(options && options.address){
         this.api += ('/' + options.address.toString().toLowerCase());
     }
-
+    
     this.templates = {
         loader: '<div class="txs-loading">Loading...</div>',
     };
@@ -640,40 +1222,139 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
         $.getJSON(this.api, this.getRequestParams(), this.refreshWidget);
     };
 
-    this.drawChart = function(aTxData){
+    this.getTooltip = function(date, cnt, cap){
+        var tooltipDateFormatter = new google.visualization.DateFormat({ 
+            pattern: "MMM dd, yyyy '+UTC'"
+        });
+        var numFormatter = new google.visualization.NumberFormat({ 
+            pattern: "#,### K"
+        });
+        var currencyFormatter = new google.visualization.NumberFormat({ 
+            //pattern: '$ #,### B'
+            pattern: '$ #,##0.0 B'
+        });
+        var tooltip = '<div style="display: block !important; text-align: left; opacity: 1 !important; color: #000000 !important; padding: 5px;">';
+        tooltip += '<span class="tooltipRow">' + tooltipDateFormatter.formatValue(date) + '</span><br/>' +
+            '<span class="tooltipRow"><b class="tooltipRowOps">Token operations:</b> ' + ((cnt < 1) ? '<1 K' : numFormatter.formatValue(cnt)) + '</span><br/>' +
+            '<span class="tooltipRow"><b class="tooltipRowCap">Tokens Cap:</b> ' + ((cap < 0.1) ? '<0.1 B' : currencyFormatter.formatValue(cap)) + '</span>' +
+            '</div>';
+        return tooltip;
+    }
+
+    this.drawChart = function(aTxData, aCap, aTotals){
+
+        var totalsHtml = '';
+        if(this.options.total && aTotals && aTotals.cap){
+            var cap = aTotals.cap ? (ethplorerWidget.Utils.formatNum(aTotals.cap / 1000000000, true, 1, true)) : '?';
+            var volume24h = aTotals.volume24h ? (ethplorerWidget.Utils.formatNum(aTotals.volume24h, true, 0, true, true, 99999999)) : '?';
+            var ivdiff = ethplorerWidget.Utils.pdiff(aTotals.cap, aTotals.capPrevious, true);
+            var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+            if('x' === ivdiff){
+                var capTrend = '';
+            }else{
+                var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+                var capTrend = ' <span class="ewDiff"><span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">(' + vdiff + ' %' + ')</span></span>';
+            }
+            var ivdiff = ethplorerWidget.Utils.pdiff(aTotals.volume24h, aTotals.volumePrevious, true);
+            var numDec = Math.abs(ivdiff) > 99 ? 0 : 1;
+            if('x' === ivdiff){
+                var volumeTrend = '';
+            }else{
+                var vdiff = ethplorerWidget.Utils.formatNum(ivdiff, true, numDec, false, true);
+                var volumeTrend = ' <span class="ewDiff"><span class="ewDiff' + ((ivdiff >= 0) ? 'Up' : 'Down') + '">(' + vdiff + ' %' + ')</span></span>';
+            }
+            var tpl = '<div class="widget-top-totals">Tokens Cap: <span class="tx-field-price">$ %cap% B</span>%capTrend% for <span class="tx-field-price">%tokens%</span> Tokens. <span class="widget-top-total-trade">Trade Vol (24h): <span class="tx-field-price">$ %volume24h%</span>%volumeTrend%</span></div>';
+            totalsHtml = ethplorerWidget.parseTemplate(tpl, {cap: cap, capTrend: capTrend, tokens: aTotals.tokensWithPrice, volume24h: volume24h, volumeTrend: volumeTrend});
+            if(this.options.full) this.el.append(totalsHtml);
+        }
+
         var aData = [];
-        aData.push(['Day', 'Token operations']);
+        if(this.options.cap && aCap){
+            aData.push(['Day', 'Token operations', {type: 'string', role: 'tooltip', 'p': {'html': true}}, 'Tokens Cap', {type: 'string', role: 'tooltip', 'p': {'html': true}}]);
+        }else{
+            aData.push(['Day', 'Token operations']);
+        }
 
         var stDate = new Date(),
             fnDate = new Date();
-        stDate.setDate(stDate.getDate() - 1);
-        fnDate.setDate(stDate.getDate() - this.options.period);
+        var date = stDate.getDate();
+        stDate.setDate(date - 1);
+        fnDate.setDate(date - this.options.period - 1);
+        var dteRangeStart = fnDate,
+            dteRangeEnd = new Date();
+        dteRangeEnd.setDate(stDate.getDate());
 
         var aCountData = {};
+        var minTs = 0,
+            minYear,
+            minMonth,
+            minDate;
         for(var i = 0; i < aTxData.length; i++){
             var aDayData = aTxData[i];
             aCountData[aDayData._id.year + '-' + aDayData._id.month + '-' + aDayData._id.day] = aDayData.cnt;
+            if((minTs == 0) || (minTs > aDayData.ts)){
+                minTs = aDayData.ts;
+                minYear = aDayData._id.year;
+                minMonth = aDayData._id.month;
+                if(aDayData._id.month < 10) minMonth = '0' + minMonth;
+                minDate = aDayData._id.day;
+                if(aDayData._id.day < 10) minDate = '0' + minDate;
+            }
         }
+        if(this.options.full) fnDate = new Date(minYear + '-' + minMonth + '-' + minDate + 'T00:00:00Z');
 
-        var curDate = true;
+        var curDate = true,
+            firstDate = true;
         while(stDate > fnDate){
+            var skipDate = false;
             var key = stDate.getFullYear() + '-' + (stDate.getMonth() + 1) + '-' + stDate.getDate();
             var cnt = ('undefined' !== typeof(aCountData[key])) ? aCountData[key] : 0;
+            if(this.options.cap && aCap) cnt = Math.round(cnt / 1000);
             if(curDate && cnt == 0){
                 curDate = false;
                 continue;
             }
-            aData.push([new Date(stDate.getFullYear(), stDate.getMonth(), stDate.getDate()), cnt]);
+            if(this.options.cap && aCap){
+                var capKeyMonth = stDate.getMonth() + 1;
+                if(capKeyMonth < 10) capKeyMonth = '0' + capKeyMonth;
+                var capKeyDay = stDate.getDate();
+                if(capKeyDay < 10) capKeyDay = '0' + capKeyDay;
+                var capKey = stDate.getFullYear() + '-' + capKeyMonth + '-' + capKeyDay;
+                var cap = ('undefined' !== typeof(aCap[capKey])) ? aCap[capKey] : 0;
+                if(cap <= 1000000000 && firstDate) skipDate = true;
+                if(aTotals && aTotals.cap && firstDate){
+                    var capdiff = ethplorerWidget.Utils.pdiff(cap, aTotals.cap);
+                    if(Math.abs(capdiff) >= 30) skipDate = true;
+                }
+                //cap = Math.round(cap / 1000000000);
+                cap = parseFloat(ethplorerWidget.Utils.formatNum(cap / 1000000000, true, 1, true));
+                var tooltip = this.getTooltip(new Date(stDate.getFullYear(), stDate.getMonth(), stDate.getDate()), cnt, cap);
+                if(!skipDate) aData.push([new Date(stDate.getFullYear(), stDate.getMonth(), stDate.getDate()), cnt, tooltip, cap, tooltip]);
+            }else{
+                aData.push([new Date(stDate.getFullYear(), stDate.getMonth(), stDate.getDate()), cnt]);
+            }
+            firstDate = false;
             var newDate = stDate.setDate(stDate.getDate() - 1);
+            dteRangeStart = new Date(newDate);
             stDate = new Date(newDate);
+        }
+        if(this.options.period > 90 || this.options.full){
+            dteRangeStart = new Date();
+            dteRangeStart.setDate(date - 90);
         }
 
         var data = google.visualization.arrayToDataTable(aData);
-        var def = {
+        var tooltipFormatter = new google.visualization.DateFormat({ 
+            pattern: "MMM dd, yyyy '+UTC'"
+        });
+        tooltipFormatter.format(data, 0);
+
+        var defOptions = {
             title: '',
             legend: { position: 'none' },
             tooltip: {
                 format: 'MMM d',
+                isHtml: (this.options.cap && aCap) ? true : false
             },
             hAxis : {
                 title: '',
@@ -684,10 +1365,13 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
                 slantedText: false,
                 maxAlternation: 1,
                 maxTextLines: 1,
-                format: 'MMM d',
+                format: ethplorerWidget.getGoogleChartAxisFormat(aData.length),
                 gridlines: {
-                    count: 10,
+                    count: ethplorerWidget.getGoogleChartAxisCount(aData.length),
                     color: "none"
+                },
+                minorGridlines: {
+                    count: 0
                 }
             },
             vAxis: {
@@ -702,35 +1386,102 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
                 gridlines: {
                     color: "none"
                 },
+                minorGridlines: {
+                    count: 0
+                },
                 maxValue: 3,
                 format: '#,###',
             },
             pointSize: 5,
         };
         if(this.options['theme'] == 'dark'){
-            def.colors = ['#47C2FF'];
-            def.titleTextStyle = {color: '#DEDEDE'};
-            def.backgroundColor = {fill: 'transparent'};
+            defOptions.colors = this.options.cap ? ['#B5A81B', '#47C2FF'] : ['#47C2FF', '#FCEC0F'];
+            defOptions.titleTextStyle = {color: '#DEDEDE'};
+            defOptions.backgroundColor = {fill: 'transparent'};
 
-            def.hAxis.textStyle = {color: '#DEDEDE'};
-            def.hAxis.titleTextStyle.color = '#DEDEDE';
-            def.hAxis.baselineColor = '#DEDEDE';
+            defOptions.hAxis.textStyle = {color: '#DEDEDE'};
+            defOptions.hAxis.titleTextStyle.color = '#DEDEDE';
+            defOptions.hAxis.baselineColor = '#DEDEDE';
 
-            def.vAxis.textStyle = {color: '#DEDEDE'};
-            def.vAxis.titleTextStyle.color = '#DEDEDE';
-            def.vAxis.baselineColor = 'none';
+            defOptions.vAxis.textStyle = {color: '#DEDEDE'};
+            defOptions.vAxis.titleTextStyle.color = '#DEDEDE';
+            defOptions.vAxis.baselineColor = 'none';
         }
-        var options = $.extend(true, def, this.options['options']);
 
-        var tooltipFormatter = new google.visualization.DateFormat({ 
-            pattern: "MMM dd, yyyy '+UTC'"
-        });
-        tooltipFormatter.format(data, 0);
+        if(this.options.cap && aCap){
+            var series = {
+                0: {
+                    type: 'steppedArea',
+                    targetAxisIndex: 0,
+                    lineWidth: 1,
+                    //areaOpacity: 0
+                },
+                1: {
+                    type: 'line',
+                    targetAxisIndex: 1,
+                    lineWidth: 3
+                }
+            };
+            var vAxes = {
+                0: {
+                    title: 'Token operations',
+                    format: '#,### K',
+                    viewWindow: {
+                        max: 1250
+                    },
+                },
+                1: {
+                    title: 'Tokens Cap',
+                    format: '$ #,### B'
+                }
+            };
+            defOptions.series = series;
+            defOptions.vAxes = vAxes;
+        }
 
-        if(this.options['type'] == 'area') var chart = new google.visualization.AreaChart(this.el[0]);
-        else if(this.options['type'] == 'line') var chart = new google.visualization.LineChart(this.el[0]);
-        else var chart = new google.visualization.ColumnChart(this.el[0]);
-        chart.draw(data, options);
+        if(this.options.full){
+            this.el.append($('<div>', {id: 'chart'}));
+            this.el.append($('<div>', {id: 'control'}));
+            $('#control').attr('style', 'height: 50px;');
+
+            var dashboard = new google.visualization.Dashboard(this.el);
+            var controlSeries = {
+                0: {
+                    type: 'area',
+                    lineWidth: 0
+                },
+                1: {
+                    targetAxisIndex: 1,
+                    type: 'area',
+                    lineWidth: 1
+                }
+            };
+
+            var defControlOptions = ethplorerWidget.getGoogleControlOptions(dteRangeStart, dteRangeEnd, this.options, controlSeries, aData.length);
+            var controlOptions = $.extend(true, defControlOptions, this.options['controlOptions']);
+            var control = new google.visualization.ControlWrapper(controlOptions);
+
+            var def = {
+                chartType: 'ComboChart',
+                containerId: 'chart',
+                options: defOptions
+            };
+
+            def.options = $.extend(true, def.options, this.options['options']);
+            var chart = new google.visualization.ChartWrapper(def);
+            dashboard.bind(control, chart);
+            dashboard.draw(data);
+        }else{
+            var options = $.extend(true, defOptions, this.options['options']);
+
+            if(this.options['type'] == 'area') var chart = new google.visualization.AreaChart(this.el[0]);
+            else if(this.options['type'] == 'line') var chart = new google.visualization.LineChart(this.el[0]);
+            else var chart = new google.visualization.ColumnChart(this.el[0]);
+
+            chart.draw(data, options);
+
+            if(this.options.total && aTotals && aTotals.cap) this.el.prepend(totalsHtml);
+        }
     };
 
     this.init = function(){
@@ -738,14 +1489,585 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
         this.el.addClass('widget-tokenHistoryGrouped');
         this.el.addClass('theme-' + (this.options.theme ? this.options.theme : 'ethplorer'));
         this.el.html(this.templates.loader);
-        //this.load();
+    };
+
+    this.getRequestParams = function(additionalParams){
+        var requestOptions = ['period', 'address', 'type', 'theme', 'cap', 'full'];
+        var params = {
+            apiKey: 'ethplorer.widget'
+        };
+        if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        }
+        for(var key in this.options){
+            if(requestOptions.indexOf(key) >= 0){
+                params[key] = this.options[key];
+            }
+        }
+        if('object' === typeof(additionalParams)){
+            for(var key in additionalParams){
+                if(requestOptions.indexOf(key) >= 0){
+                    params[key] = additionalParams[key];
+                }
+            }
+        }
+        return params;
+    };
+
+    this.showWidget = function(obj, data){
+        obj.el.find('.txs-loading').remove();
+        obj.drawChart(data.countTxs, data.cap, data.totals);
+        ethplorerWidget.appendEthplorerLink(obj);
+        if('function' === typeof(obj.options.onLoad)){
+            obj.options.onLoad();
+        }
+        setTimeout(ethplorerWidget.fixTilda, 300);
+    }
+
+    this.refreshWidget = function(obj){
+        return function(data){
+            if(data && !data.error && data.countTxs){
+                obj.widgetData = data.countTxs;
+                obj.widgetDataCap = data.cap;
+                obj.widgetDataTotals = data.totals;
+                if(obj.options.full){
+                    obj.showWidget(obj, data);
+                }else{
+                    google.charts.setOnLoadCallback(
+                        function(){
+                            obj.showWidget(obj, data);
+                        }
+                    );
+                }
+            }else{
+                obj.el.find('.txs-loading').remove();
+            }
+        };
+    }(this);
+
+    $(window).resize(this, function(){
+        var newWidth = $(window).width();
+        var obj = arguments[0].data;
+        if(newWidth !== obj.cachedWidth){
+            obj.cachedWidth = newWidth;
+        }else{
+            return;
+        }
+        if(obj.resizeTimer) clearTimeout(obj.resizeTimer);
+        obj.resizeTimer = setTimeout(function(){
+            if(obj.widgetData){
+                obj.el.empty();
+                obj.drawChart(obj.widgetData, obj.widgetDataCap, obj.widgetDataTotals);
+                ethplorerWidget.appendEthplorerLink(obj);
+            }
+        }, 500);
+    });
+
+    this.init();
+
+    if(this.options.full) ethplorerWidget.chartControlWidgets.push(this);
+    else ethplorerWidget.chartWidgets.push(this);
+};
+
+/**
+ * Token history with prices grouped Widget.
+ *
+ * @param {type} element
+ * @param {type} options
+ * @param {type} templates
+ * @returns {undefined}
+ */
+ethplorerWidget.Type['tokenPriceHistoryGrouped'] = function(element, options, templates){
+    this.type = 'tokenPriceHistoryGrouped';
+    this.el = element;
+    this.widgetData = null;
+    this.widgetPriceData = null;
+    this.resizeTimer = null;
+    this.cachedWidth = $(window).width();
+
+    this.options = {
+        period: 365,
+        type: 'area',
+        theme: 'light',
+        options: {},
+        controlOptions: {}
+    };
+
+    if(options){
+        for(var key in options){
+            this.options[key] = options[key];
+        }
+    }
+    if(this.options.period <= 0){
+        this.options.period = 365;
+    }else if(this.options.period < 7){
+        this.options.period = 7;
+    }
+
+    this.api = ethplorerWidget.api + '/getTokenPriceHistoryGrouped';
+    if(options && options.address){
+        this.api += ('/' + options.address.toString().toLowerCase());
+    }
+
+    this.templates = {
+        loader: '<div class="txs-loading">Loading...</div>',
+    };
+
+    this.load = function(){
+        var address;
+        if(options && options.address){
+            address = options.address.toString().toLowerCase();
+        }
+        if(address && ethplorerWidget.preloadPriceHistory && ethplorerWidget.preloadPriceHistory[address]){
+            //console.log(ethplorerWidget.preloadPriceHistory[address]);
+            this.refreshWidget(ethplorerWidget.preloadPriceHistory[address]);
+        }else{
+            $.getJSON(this.api, this.getRequestParams(), this.refreshWidget);
+        }
+    };
+
+    this.getTooltip = function(noPrice, date, low, open, close, high, operations, volume, convertedVolume, rate, diff, onlyPrice, avg, curDate){
+        var tooltipDateFormatter = new google.visualization.DateFormat({ 
+            pattern: "MMM dd, yyyy '+UTC'"
+        });
+        var numFormatter = new google.visualization.NumberFormat({ 
+            pattern: "#,###"
+        });
+        var currencyFormatter = new google.visualization.NumberFormat({ 
+            pattern: '#,##0.00###'
+        });
+        var avgFormatter = new google.visualization.NumberFormat({ 
+            pattern: '#,##0.00'
+        });
+        var tooltip = '<div style="display: block !important; text-align: left; opacity: 1 !important; color: #000000 !important; padding: 5px;">';
+        tooltip += tooltipDateFormatter.formatValue(date) + '<br/>';
+        if(noPrice){
+            tooltip += '<span class="tooltipRow"><b>Token operations:</b> ' + operations + '</span><br/>';
+        }else{
+            if(!avg){
+                if(volume > 0) avg = convertedVolume / volume;
+                else avg = (open + close) / 2;
+            }
+
+            if(onlyPrice && !diff){
+                diff = ethplorerWidget.Utils.pdiff(close, open, true);
+                if('x' === diff){
+                    diff = 0;
+                }else{
+                    var numDec = Math.abs(diff) > 99 ? 0 : 2;
+                    var diff = ethplorerWidget.Utils.formatNum(diff, true, numDec, false, true);
+                }
+            }
+            var diffHtml = ' <span style="color:' + (diff >= 0 ? '#1E8C1E' : '#AE2525') + ';">(' + diff + '%)</span>';
+
+            if(rate && rate > 0){
+                tooltip += '<span class="tooltipRow"><b>Price:</b> ' + (onlyPrice ? currencyFormatter.formatValue(rate) : avgFormatter.formatValue(rate)) + ' USD' + diffHtml + '</span><br/>';
+            }else{
+                diffHtml = '';
+                var diff = ethplorerWidget.Utils.pdiff(close, open, true);
+                if('x' === diff){
+                    var pdiff = 0;
+                }else{
+                    var numDec = Math.abs(diff) > 99 ? 0 : 2;
+                    var pdiff = ethplorerWidget.Utils.formatNum(diff, true, numDec, false, true);
+                }
+                var diffHtml = ' <span style="color:' + (pdiff >= 0 ? '#1E8C1E' : '#AE2525') + ';">(' + pdiff + '%)</span>';
+                tooltip += '<span class="tooltipRow"><b>Average:</b> ' + avgFormatter.formatValue(avg) + ' USD</span>' +
+                (curDate ? '' : ('<br/><span class="tooltipRow"><b>Open:</b> ' + currencyFormatter.formatValue(open) + ' <b>Close:</b> ' + currencyFormatter.formatValue(close) + diffHtml))
+                +'</span><br/>' +
+                '<span class="tooltipRow"><b>High:</b> ' + currencyFormatter.formatValue(high) + ' <b>Low:</b> ' + currencyFormatter.formatValue(low) + '</span><br/>';
+            }
+            tooltip += '<span class="tooltipRow"><b class="tooltipRowOps">Token operations:</b> ' + numFormatter.formatValue(operations) + '</span>' +
+                (onlyPrice ? '' : ('<br/><span class="tooltipRow"><b class="tooltipRowVol">Volume:</b> ' + numFormatter.formatValue(volume.toFixed(0)) + ' (' + numFormatter.formatValue(convertedVolume.toFixed(2)) + ' USD)</span>'));
+        }
+        tooltip += '</div>';
+        return tooltip;
+    }
+
+    this.drawChart = function(aTxData, widgetPriceData, currentPrice){
+        var onlyPrice = false,
+            defaultPriceFormat = '$ #,##0.00##';
+        if('undefined' !== typeof(currentPrice) && 'undefined' !== typeof(currentPrice.onlyPrice)) onlyPrice = currentPrice.onlyPrice;
+
+        var aData = [];
+        if(aTxData.length){
+            if(widgetPriceData && widgetPriceData.length){
+                if(currentPrice){
+                    var currentDate = new Date();
+                    var currentDatePriceKey = currentDate.getFullYear() + '-' + (currentDate.getMonth() < 9 ? '0' : '') + (currentDate.getMonth() + 1) + '-' + (currentDate.getDate() < 10 ? '0' : '') + currentDate.getDate();
+
+                    var prevDate = new Date();
+                    prevDate.setDate(currentDate.getDate() - 1);
+                    var prevDatePriceKey = prevDate.getFullYear() + '-' + (prevDate.getMonth() < 9 ? '0' : '') + (prevDate.getMonth() + 1) + '-' + (prevDate.getDate() < 10 ? '0' : '') + prevDate.getDate();
+
+                    if(widgetPriceData[widgetPriceData.length - 1].date != currentDatePriceKey && widgetPriceData[widgetPriceData.length - 1].date == prevDatePriceKey){
+                        if(!currentPrice.volume24h) currentPrice.volume24h = 0;
+                        if(currentPrice.rate && (currentPrice.rate > 0) && (currentPrice.volume24h || onlyPrice) && currentPrice.ts){
+                            var diff = ethplorerWidget.Utils.pdiff(currentPrice.rate, widgetPriceData[widgetPriceData.length - 1].close, true);
+                            if('x' === diff){
+                                var diff = 0;
+                            }else{
+                                var numDec = Math.abs(diff) > 99 ? 0 : 2;
+                                var pdiff = ethplorerWidget.Utils.formatNum(diff, true, numDec, false, true);
+                            }
+                            widgetPriceData.push({
+                                ts: currentPrice.ts,
+                                date: currentDatePriceKey,
+                                hour: 0,
+                                open: widgetPriceData[widgetPriceData.length - 1].close,
+                                close: parseFloat(currentPrice.rate),
+                                high: 0,
+                                low: 0,
+                                average: 0,
+                                rate: currentPrice.rate,
+                                volumeConverted: parseFloat(currentPrice.volume24h),
+                                volume: currentPrice.volume24h / currentPrice.rate,
+                                diff: pdiff
+                            });
+                            if(currentPrice.rate < 0.1) defaultPriceFormat = '$ #,##0.0000';
+                        }
+                    }
+                }
+
+                var strLastPriceDate = widgetPriceData[widgetPriceData.length - 1].date + 'T00:00:00Z';
+                var strFirstDate = strLastPriceDate;
+            }else{
+                var currentDate = new Date();
+                var currentDateKey = currentDate.getFullYear() + '-' + (currentDate.getMonth() < 9 ? '0' : '') + (currentDate.getMonth() + 1) + '-' + (currentDate.getDate() < 10 ? '0' : '') + currentDate.getDate();
+                var strFirstDate = currentDateKey + 'T00:00:00Z';
+            }
+
+            /*if(widgetPriceData && widgetPriceData.length){
+                var strLastPriceDate = widgetPriceData[widgetPriceData.length - 1].date + 'T00:00:00Z';
+            }*/
+            if(strLastPriceDate && (new Date(strLastPriceDate) > new Date(strFirstDate))){
+                strFirstDate = strLastPriceDate;
+            }
+        }else{
+            return;
+        }
+
+        var stDate = new Date(strFirstDate);
+            fnDate = new Date(strFirstDate),
+            rangeStart = new Date(strFirstDate);
+        var date = stDate.getDate();
+        fnDate.setDate(date - this.options.period + 1);
+        rangeStart.setDate(date - (this.options.period > 90 ? 90 : this.options.period) + 1);
+
+        // prepare data
+        var aCountData = {};
+        var aPriceData = {};
+        for(var i = 0; i < aTxData.length; i++){
+            var aDayData = aTxData[i];
+            aCountData[aDayData._id.year + '-' + aDayData._id.month + '-' + aDayData._id.day] = aDayData.cnt;
+        }
+        var noPrice = true,
+            startPriceDate = new Date(),
+            priceNotFound = true;
+        if(widgetPriceData && widgetPriceData.length){
+            for(var i = 0; i < widgetPriceData.length; i++){
+                var aDayPriceData = widgetPriceData[i],
+                    numZeroes = 0;
+                if(aDayPriceData.low == 0) numZeroes++;
+                if(aDayPriceData.open == 0) numZeroes++;
+                if(aDayPriceData.close == 0) numZeroes++;
+                if(aDayPriceData.high == 0) numZeroes++;
+
+                if((numZeroes >= 3) && priceNotFound){
+                    continue;
+                }else{
+                    aPriceData[aDayPriceData.date] = aDayPriceData;
+                    if(priceNotFound){
+                        var strPriceDate = aDayPriceData.date.substring(0, 4) + '-' + aDayPriceData.date.substring(5, 7) + '-' + aDayPriceData.date.substring(8) + 'T00:00:00Z';
+                        startPriceDate = new Date(strPriceDate);
+                    }
+                    priceNotFound = false;
+                }
+            }
+
+            if(!priceNotFound){
+                noPrice = false;
+                aData.push(['Day', 'Low', 'Open', 'Close', 'High', {type: 'string', role: 'tooltip', 'p': {'html': true}}, 'Token operations', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}, 'Volume', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}]);
+                if(this.options.period > 90){
+                    fnDate = startPriceDate;
+                }
+            }
+        }
+        if(noPrice){
+            var strMonth = aTxData[aTxData.length - 1]._id.month < 10 ? ('0' + aTxData[aTxData.length - 1]._id.month) : aTxData[aTxData.length - 1]._id.month,
+                strDay = aTxData[aTxData.length - 1]._id.day < 10 ? ('0' + aTxData[aTxData.length - 1]._id.day) : aTxData[aTxData.length - 1]._id.day;
+            var strDate = aTxData[aTxData.length - 1]._id.year + '-' + strMonth + '-' + strDay + 'T00:00:00Z';
+            fnDate = new Date(strDate);
+            aData.push(['Day', 'Token operations', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}]);
+        }
+        //console.log(aCountData);
+        //console.log(aPriceData);
+
+        var timeDiff = Math.abs(new Date(strFirstDate).getTime() - fnDate.getTime());
+        var diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+        if(diffDays < 7) fnDate.setDate(fnDate.getDate() - (7 - diffDays));
+
+        var curDate = true;
+        for(var d = new Date(strFirstDate); d >= fnDate; d.setDate(d.getDate() - 1)){
+            // get tx count
+            var key = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+            var cnt = ('undefined' !== typeof(aCountData[key])) ? aCountData[key] : 0;
+
+            // get price data
+            var keyPrice = d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
+            //console.log(keyPrice);
+
+            // 'Low', 'Open', 'Close', 'High'
+            var low = 0, open = 0, high = 0, close = 0, volume = 0, volumeConverted = 0, rate = 0, diff = 0, avg = 0;
+            if('undefined' !== typeof(aPriceData[keyPrice])){
+                low = aPriceData[keyPrice]['low'];
+                open = aPriceData[keyPrice]['open'];
+                close = aPriceData[keyPrice]['close'];
+                high = aPriceData[keyPrice]['high'];
+                volume = ('undefined' !== typeof(aPriceData[keyPrice]['volume'])) ? aPriceData[keyPrice]['volume'] : 0;
+                volumeConverted = ('undefined' !== typeof(aPriceData[keyPrice]['volumeConverted'])) ? aPriceData[keyPrice]['volumeConverted'] : 0;
+                rate = ('undefined' !== typeof(aPriceData[keyPrice]['rate'])) ? aPriceData[keyPrice]['rate'] : 0;
+                diff = ('undefined' !== typeof(aPriceData[keyPrice]['diff'])) ? aPriceData[keyPrice]['diff'] : 0;
+                avg = ('undefined' !== typeof(aPriceData[keyPrice]['average'])) ? aPriceData[keyPrice]['average'] : 0;
+            }
+
+            var chartMonth = d.getMonth() + 1;
+            if(chartMonth < 10) chartMonth = '0' + chartMonth;
+            var chartDay = d.getDate();
+            if(chartDay < 10) chartDay = '0' + chartDay;
+            var strChartDate = d.getFullYear() + '-' + chartMonth + '-' + chartDay + 'T00:00:00Z';
+
+            var tooltip = this.getTooltip(noPrice, new Date(strChartDate), low, open, close, high, cnt, volume, volumeConverted, rate, diff, onlyPrice, avg, curDate);
+            if(noPrice){
+                aData.push([new Date(strChartDate), cnt, 'opacity: 0.5', tooltip]);
+            }else{
+                aData.push([new Date(strChartDate), low, open, close, high, tooltip, cnt, 'opacity: 0.5', tooltip, volume, this.options['theme'] == 'dark' ? 'opacity: 0.15' : 'opacity: 0.5', tooltip]);
+            }
+            curDate = false;
+        }
+        //console.log(aData);
+        var data = google.visualization.arrayToDataTable(aData);
+
+        // create div's
+        this.el.append($('<div>', {id: 'chart'}));
+        this.el.append($('<div>', {id: 'control'}));
+        $('#control').attr('style', 'height: 50px;');
+        if(this.options.period < 2){
+            $('#control').hide();
+        }
+
+        // create dashboard and control wrapper
+        var dashboard = new google.visualization.Dashboard(this.el);
+        var controlSeries = {
+            0: {
+                type: 'area',
+                lineWidth: 0
+            },
+            1: {
+                targetAxisIndex: 1,
+                type: 'area',
+                lineWidth: 1
+            }
+        };
+        if(noPrice){
+            controlSeries = {
+                0: {
+                    type: 'area',
+                    targetAxisIndex: 0,
+                    lineWidth: 1
+                }
+            };
+        }
+        var defControlOptions = ethplorerWidget.getGoogleControlOptions(rangeStart, new Date(strFirstDate), this.options, controlSeries, aData.length);
+        var controlOptions = $.extend(true, defControlOptions, this.options['controlOptions']);
+        var control = new google.visualization.ControlWrapper(controlOptions);
+
+        // create combo chart
+        var series = {
+            0: {
+                type: 'candlesticks',
+                targetAxisIndex: 1
+            },
+            1: {
+                type: 'line',
+                targetAxisIndex: 0
+            },
+            2: {
+                type: 'bars',
+                targetAxisIndex: 2,
+            },
+        };
+        var vAxes = {
+            1: {
+                title: 'Price',
+                format: defaultPriceFormat
+                //format: 'currency'
+            },
+            0: {
+                title: 'Token operations',
+                format: 'decimal',
+            },
+            2: {
+                textStyle: {
+                    color: 'none'
+                }
+            }
+        };
+        if(noPrice){
+            series = {
+                0: {
+                    type: noPrice ? 'area' : 'line',
+                    targetAxisIndex: 0
+                },
+            };
+            vAxes = {
+                0: {
+                    title: 'Token operations',
+                    format: 'decimal',
+                }
+            };
+        }
+        var def = {
+            chartType: 'ComboChart',
+            containerId: 'chart',
+            options: {
+                //theme: 'maximized',
+                title: '',
+                legend: { position: 'none' },
+                tooltip: {
+                    //format: 'MMM d',
+                    isHtml: true
+                },
+                colors: ['#65A5DF', 'black'],
+                series: series,
+                hAxis : {
+                    title: '',
+                    titleTextStyle: {
+                        italic: false
+                    },
+                    textPosition: 'out',
+                    slantedText: false,
+                    maxAlternation: 1,
+                    maxTextLines: 1,
+                    format: ethplorerWidget.getGoogleChartAxisFormat(aData.length),
+                    gridlines: {
+                        count: ethplorerWidget.getGoogleChartAxisCount(aData.length),
+                        color: "none"
+                    },
+                    minorGridlines: {
+                        count: 0
+                    }
+                },
+                vAxis: {
+                    viewWindowMode: 'maximized',
+                    title: '',
+                    titleTextStyle: {
+                        italic: false
+                    },
+                    gridlines: {
+                        color: "none"
+                    },
+                    minorGridlines: {
+                        count: 0
+                    },
+                    //format: '#,###',
+                    /*minValue: 0,
+                    maxValue: 3,
+                    viewWindow: {
+                        min: 0
+                    },*/
+                },
+                vAxes: vAxes,
+                pointSize: noPrice ? 2 : 0,
+                lineWidth: 1,
+                bar: { groupWidth: '70%' },
+                candlestick: {
+                    fallingColor: {
+                        // red
+                        strokeWidth: 1,
+                        fill: '#951717',
+                        stroke: '#8b0000'
+                    },
+                    risingColor: {
+                        // green
+                        strokeWidth: 1,
+                        fill: '#177217',
+                        stroke: '#006400'
+                    }
+                }
+            }
+        };
+        var color = '#989795'
+        if(this.options['theme'] == 'dark'){
+            def.options.colors = noPrice ? ['#FCEC0F']: [color, '#FCEC0F', '#DEDEDE'];
+            def.options.titleTextStyle = {color: '#DEDEDE'};
+            def.options.backgroundColor = {fill: 'transparent'};
+
+            def.options.hAxis.textStyle = {color: '#DEDEDE'};
+            def.options.hAxis.titleTextStyle.color = '#DEDEDE';
+            def.options.hAxis.baselineColor = '#DEDEDE';
+
+            def.options.vAxis.textStyle = {color: '#DEDEDE'};
+            def.options.vAxis.titleTextStyle.color = '#DEDEDE';
+            def.options.vAxis.baselineColor = 'none';
+        }
+        def.options = $.extend(true, def.options, this.options['options']);
+        var chart = new google.visualization.ChartWrapper(def);
+
+        if(!noPrice){
+            var $chartEl = $("#chart")
+            $("#chart").bind("DOMNodeInserted",function(){
+                // console.log('DOMNodeInserted')
+                $chartEl.find('[width="2"][fill="' + color + '"]')
+                    .each(function (index, item) {
+                        var sibling = $(item).siblings()[0];
+                        if (sibling) {
+                            var width = $(sibling).attr('width');
+                            var w = width > 27 ? 2 : (width > 2 ? 1 : + width / 2);
+                            var x = +$(sibling).attr('x') + (width - w)  / 2;
+                            $(item)
+                                .attr('width', w)
+                                .attr('x', x)
+                        }
+                    })
+            });
+            google.visualization.events.addListener(chart, 'ready', function(){
+                // console.log('ready')
+                $chartEl.find('[width="2"][fill="'+color+'"]').each(function (index, item) {
+                    var sibling = $(item).siblings()[0];
+                    if (sibling) {
+                        var width = $(sibling).attr('width');
+                        var w = width > 27 ? 2 : (width > 2 ? 1 : + width / 2);
+                        var x = +$(sibling).attr('x') + (width - w)  / 2;
+                        $(item)
+                            .attr('width', w)
+                            .attr('x', x)
+                    }
+                })
+            });
+        }
+        // draw chart
+        dashboard.bind(control, chart);
+        dashboard.draw(data);
+    };
+
+    this.init = function(){
+        this.el.addClass('ethplorer-widget');
+        this.el.addClass('widget-tokenHistoryGrouped');
+        this.el.addClass('theme-' + (this.options.theme ? this.options.theme : 'ethplorer'));
+        this.el.html(this.templates.loader);
     };
 
     this.getRequestParams = function(additionalParams){
         var requestOptions = ['period', 'address', 'type', 'theme'];
         var params = {
-            apiKey: 'freekey',
+            apiKey: 'ethplorer.widget'
         };
+        if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        }
         for(var key in this.options){
             if(requestOptions.indexOf(key) >= 0){
                 params[key] = this.options[key];
@@ -763,20 +2085,21 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
 
     this.refreshWidget = function(obj){
         return function(data){
-            console.log(data);
-            if(data && !data.error && data.countTxs /*&& data.countTxs.length*/){
-                obj.widgetData = data.countTxs;
-                google.charts.setOnLoadCallback(
-                    function(){
-                        obj.el.find('.txs-loading').remove();
-                        obj.drawChart(data.countTxs);
-                        ethplorerWidget.appendEthplorerLink(obj);
-                        if('function' === typeof(obj.options.onLoad)){
-                            obj.options.onLoad();
-                        }
-                        setTimeout(ethplorerWidget.fixTilda, 300);
+            if(data && !data.error && data.history){
+                //console.log(data);
+                obj.widgetData = data.history.countTxs;
+                obj.widgetPriceData = data.history.prices;
+                obj.el.find('.txs-loading').remove();
+                if(!obj.widgetData.length){
+                    obj.el.hide();
+                }else{
+                    obj.drawChart(data.history.countTxs, data.history.prices, data.history.current);
+                    ethplorerWidget.appendEthplorerLink(obj);
+                    if('function' === typeof(obj.options.onLoad)){
+                        obj.options.onLoad();
                     }
-                );
+                }
+                setTimeout(ethplorerWidget.fixTilda, 300);
             }else{
                 obj.el.find('.txs-loading').remove();
             }
@@ -784,7 +2107,482 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
     }(this);
 
     $(window).resize(this, function(){
+        var newWidth = $(window).width();
         var obj = arguments[0].data;
+        if(newWidth !== obj.cachedWidth){
+            obj.cachedWidth = newWidth;
+        }else{
+            return;
+        }
+        if(obj.resizeTimer) clearTimeout(obj.resizeTimer);
+        obj.resizeTimer = setTimeout(function(){
+            if(obj.widgetData){
+                obj.el.empty();
+                obj.drawChart(obj.widgetData, obj.widgetPriceData);
+                ethplorerWidget.appendEthplorerLink(obj);
+            }
+        }, 500);
+    });
+
+    this.init();
+    ethplorerWidget.chartControlWidgets.push(this);
+};
+
+/**
+ * Address history with prices grouped Widget.
+ *
+ * @param {type} element
+ * @param {type} options
+ * @param {type} templates
+ * @returns {undefined}
+ */
+ethplorerWidget.Type['addressPriceHistoryGrouped'] = function(element, options, templates){
+    this.type = 'addressPriceHistoryGrouped';
+    this.el = element;
+    this.widgetData = null;
+    this.widgetPriceData = null;
+    this.resizeTimer = null;
+    this.cachedWidth = $(window).width();
+    this.reloadData = false;
+    this.addEthplorerLink = false;
+
+    this.options = {
+        period: 365,
+        type: 'area',
+        theme: 'light',
+        options: {},
+        controlOptions: {}
+    };
+
+    if(options){
+        for(var key in options){
+            this.options[key] = options[key];
+        }
+    }
+    if(this.options.period <= 0){
+        this.options.period = 365;
+    }else if(this.options.period < 7){
+        this.options.period = 7;
+    }
+
+    this.api = ethplorerWidget.api + '/getAddressPriceHistoryGrouped';
+    if(options && options.address){
+        this.api += ('/' + options.address.toString().toLowerCase());
+    }
+
+    this.templates = {
+        loader: '<div class="txs-loading">Loading...</div>',
+    };
+
+    this.load = function(reloadData, opt){
+        var address;
+        if(options && options.address){
+            address = options.address.toString().toLowerCase();
+        }
+        if(reloadData){
+            this.reloadData = true;
+        }
+        if(!this.reloadData && address && ethplorerWidget.preloadPriceHistory && ethplorerWidget.preloadPriceHistory[address]){
+            //console.log(ethplorerWidget.preloadPriceHistory[address]);
+            this.refreshWidget(ethplorerWidget.preloadPriceHistory[address]);
+        }else{
+            if(this.reloadData){
+                if(opt && opt.showTx){
+                    this.options['showTx'] = opt.showTx;
+                }
+                //this.el.empty();
+                //this.el.html(this.templates.loader);
+                //this.reloadData = false;
+            }
+            $.getJSON(this.api, this.getRequestParams(), this.refreshWidget);
+        }
+    };
+
+    this.getTooltip = function(noPrice, date, balance, volume, txs, dteUpdated){
+        var tooltipDateFormatter = new google.visualization.DateFormat({ 
+            pattern: "MMM dd, yyyy '+UTC'"
+        });
+        var numFormatter = new google.visualization.NumberFormat({ 
+            pattern: "#,###"
+        });
+        var currencyFormatter = new google.visualization.NumberFormat({ 
+            pattern: '#,##0'
+        });
+        var tooltip = '<div style="display: block !important; text-align: left; opacity: 1 !important; color: #000000 !important; padding: 5px;">';
+        tooltip += '<span class="tooltipRow">' + tooltipDateFormatter.formatValue(date) + '</span><br/>' +
+            (noPrice ? '' : '<span class="tooltipRow"><b>Volume:</b> ' + currencyFormatter.formatValue(volume) + ' USD</span><br/>') +
+            (noPrice ? '' : '<span class="tooltipRow"><b>Balance:</b> ' + currencyFormatter.formatValue(balance) + ' USD</span><br/>') +
+            '<span class="tooltipRow"><b>Transfers:</b> ' + numFormatter.formatValue(txs) + '</span>' +
+            (dteUpdated ? ('<br/><span class="tooltipRow"><b>Updated:</b> ' + dteUpdated + '</span>') : '') +
+            '</div>';
+        return tooltip;
+    }
+
+    this.drawChart = function(widgetData){
+        var aData = [];
+
+        if('undefined' === typeof(widgetData['volume']) && 'undefined' === typeof(widgetData['txs'])){
+            return;
+            /*var firstMonth = aTxData[0]._id.month,
+                firstDay = aTxData[0]._id.day;
+            if(firstMonth < 10) firstMonth = '0' + firstMonth;
+            if(firstDay < 10) firstDay = '0' + firstDay;
+            var strFirstDate = aTxData[0]._id.year + '-' + firstMonth + '-' + firstDay + 'T00:00:00Z';*/
+        }
+        if('undefined' === typeof(widgetData['volume'])) widgetData['volume'] = [];
+        if('undefined' === typeof(widgetData['balances'])) widgetData['balances'] = [];
+        if('undefined' === typeof(widgetData['txs'])) widgetData['txs'] = [];
+
+        var noPrice = true;
+
+        // prepare prices
+        var lastAverage = 0;
+        var aPrices = {};
+        if('undefined' !== typeof(widgetData['prices'])){
+            for(var token in widgetData['prices']){
+                aPrices[token] = {};
+                if(widgetData['prices'][token].length > 0) noPrice = false;
+                for(var i = widgetData['prices'][token].length - 1; i >= 0; i--){
+                    var priceData = widgetData['prices'][token][i];
+                    if(priceData['average'] > 0) lastAverage = priceData['average'];
+                    else if(priceData['rate'] > 0) lastAverage = priceData['rate'];
+                    aPrices[token][priceData['date']] = lastAverage;
+                }
+            }
+        }
+        console.log('noPrice ' + noPrice);
+
+        if(noPrice){
+            aData.push(['Day', 'Transfers', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}]);
+        }else{
+            aData.push(['Day', 'Balance', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}, 'Transfers', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}, 'Volume', {role: 'style'}, {type: 'string', role: 'tooltip', 'p': {'html': true}}]);
+        }
+
+        if('undefined' === typeof(widgetData['firstDate'])){
+            for(var t in widgetData['txs']){
+                widgetData['firstDate'] = t;
+                break;
+            }
+        }
+
+        var rangeStart = null,
+            rangeEnd,
+            curDate = new Date(),
+            fnMonth = curDate.getUTCMonth() + 1,
+            fnDay = curDate.getUTCDate(),
+            fnDate = new Date(curDate.getUTCFullYear() + '-' + (fnMonth < 10 ? '0' + fnMonth : fnMonth) + '-' + (fnDay < 10 ? '0' + fnDay : fnDay) + 'T00:00:00Z'),
+            aBalances = {},
+            strFirstDate = widgetData['firstDate'] + 'T00:00:00Z',
+            dteUpdated;
+
+        for(var d = new Date(strFirstDate); d <= fnDate; d.setDate(d.getDate() + 1)){
+            var month = 1 + d.getMonth(),
+                day = d.getDate(),
+                volumeDate = d.getFullYear() + '-' + (month < 10 ? '0' + month : month) + '-' + (day < 10 ? '0' + day : day),
+                strVolumeDate = volumeDate + 'T00:00:00Z';
+
+            // get volumes
+            var volume = 0;
+            if(!noPrice && 'undefined' !== typeof(widgetData['volume'][volumeDate])){
+                for(var token in widgetData['volume'][volumeDate]){
+                    if('undefined' === typeof(widgetData['tokenPrices'][token])){
+                        continue;
+                    }
+                    if(d.getTime() == fnDate.getTime() && ('undefined' !== typeof(widgetData['tokenPrices'][token]['rate']))){
+                        aPrices[token][volumeDate] = widgetData['tokenPrices'][token]['rate'];
+                    }
+                    if('undefined' !== typeof(aPrices[token]) && 'undefined' !== typeof(aPrices[token][volumeDate])){
+                        volume += parseFloat(widgetData['volume'][volumeDate][token]) * parseFloat(aPrices[token][volumeDate]);
+                    }
+                }
+
+                if(!rangeStart && volume != 0){
+                    rangeStart = strVolumeDate;
+                }
+            }
+
+            // get balances
+            var balance = 0;
+            if(!noPrice){
+                if('undefined' !== typeof(widgetData['balances'][volumeDate])){
+                    for(var token in widgetData['balances'][volumeDate]){
+                        aBalances[token] = parseFloat(widgetData['balances'][volumeDate][token]);
+                    }
+                }
+                for(var token in aBalances){
+                    if(d.getTime() == fnDate.getTime() && ('undefined' !== typeof(widgetData['tokenPrices'][token]) && 'undefined' !== typeof(widgetData['tokenPrices'][token]['rate']))){
+                        aPrices[token][volumeDate] = widgetData['tokenPrices'][token]['rate'];
+                    }
+                    if('undefined' !== typeof(aPrices[token]) && 'undefined' !== typeof(aPrices[token][volumeDate])){
+                        balance += parseFloat(aBalances[token]) * parseFloat(aPrices[token][volumeDate]);
+                    }
+                }
+            }
+
+            // get transfers
+            var transfers = 0;
+            if('undefined' !== typeof(widgetData['txs'][volumeDate])){
+                transfers = widgetData['txs'][volumeDate];
+            }
+
+            if(d.getTime() == fnDate.getTime() && ('undefined' !== typeof(widgetData['updated']))){
+                dteUpdated = widgetData['updated'];
+            }
+
+            rangeEnd = strVolumeDate;
+            var tooltip = this.getTooltip(noPrice, new Date(strVolumeDate), balance, volume, transfers, dteUpdated);
+            if(noPrice){
+                aData.push([new Date(strVolumeDate), transfers, 'opacity: 0.5', tooltip]);
+            }else{
+                aData.push([new Date(strVolumeDate), balance, 'opacity: 0.5', tooltip, transfers, 'opacity: 0.5', tooltip, volume, this.options['theme'] == 'dark' ? 'opacity: 0.15' : 'opacity: 0.5', tooltip]);
+            }
+        }
+
+        var dteRangeStart = new Date(rangeStart),
+            dteRangeEnd = new Date(rangeEnd);
+
+        var timeDiff = Math.abs(dteRangeEnd.getTime() - dteRangeStart.getTime());
+        var diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+        if(diffDays < 7) dteRangeStart.setDate(dteRangeStart.getDate() - (7 - diffDays));
+        else if(diffDays > 90) dteRangeStart.setDate(dteRangeStart.getDate() + (diffDays - 90));
+
+        //console.log(dteRangeStart);
+        //console.log(dteRangeEnd);
+        //console.log(aData);
+        var data = google.visualization.arrayToDataTable(aData);
+
+        // create div's
+        this.el.append($('<div>', {id: 'chart'}));
+        this.el.append($('<div>', {id: 'control'}));
+        $('#control').attr('style', 'height: 50px;');
+        if(this.options.period < 2){
+            $('#control').hide();
+        }
+
+        // create dashboard and control wrapper
+        var dashboard = new google.visualization.Dashboard(this.el);
+        var controlSeries = {
+            0: {
+                targetAxisIndex: 0,
+                type: 'area',
+                lineWidth: 1
+            }
+        };
+        var defControlOptions = ethplorerWidget.getGoogleControlOptions(dteRangeStart, dteRangeEnd, this.options, controlSeries, aData.length);
+        var controlOptions = $.extend(true, defControlOptions, this.options['controlOptions']);
+        var control = new google.visualization.ControlWrapper(controlOptions);
+
+        // create combo chart
+        var series = {
+            0: {
+                type: 'area',
+                targetAxisIndex: 0
+            },
+            1: {
+                type: 'line',
+                targetAxisIndex: 2
+            },
+            2: {
+                type: 'bars',
+                targetAxisIndex: 1,
+            },
+        };
+        var vAxes = {
+            0: {
+                title: 'Price',
+                format: '$ #,##0'
+            },
+            1: {
+                title: 'Volume',
+                format: 'decimal',
+            },
+            2: {
+                textStyle: {
+                    color: 'none'
+                }
+            }
+        };
+        if(noPrice){
+            series = {
+                0: {
+                    type: 'line',
+                    targetAxisIndex: 0
+                },
+            };
+            vAxes = {
+                0: {
+                    title: 'Transfers',
+                    format: "#,###",
+                }
+            };
+        }
+        var def = {
+            chartType: 'ComboChart',
+            containerId: 'chart',
+            options: {
+                //theme: 'maximized',
+                title: '',
+                legend: { position: 'none' },
+                tooltip: {
+                    //format: 'MMM d',
+                    isHtml: true
+                },
+                colors: ['#65A5DF', 'black'],
+                series: series,
+                hAxis : {
+                    title: '',
+                    titleTextStyle: {
+                        italic: false
+                    },
+                    textPosition: 'out',
+                    slantedText: false,
+                    maxAlternation: 1,
+                    maxTextLines: 1,
+                    format: ethplorerWidget.getGoogleChartAxisFormat(aData.length),
+                    gridlines: {
+                        count: ethplorerWidget.getGoogleChartAxisCount(aData.length),
+                        color: "none"
+                    },
+                    minorGridlines: {
+                        count: 0
+                    }
+                },
+                vAxis: {
+                    viewWindowMode: 'maximized',
+                    minValue: 0,
+                    viewWindow: {
+                        min: 0
+                    },
+                    title: '',
+                    titleTextStyle: {
+                        italic: false
+                    },
+                    gridlines: {
+                        color: "none"
+                    },
+                    minorGridlines: {
+                        count: 0
+                    }
+                },
+                vAxes: vAxes,
+                pointSize: 3,
+                lineWidth: 1,
+                bar: { groupWidth: '70%' },
+                candlestick: {
+                    fallingColor: {
+                        // red
+                        strokeWidth: 1,
+                        fill: '#951717',
+                        stroke: '#8b0000'
+                    },
+                    risingColor: {
+                        // green
+                        strokeWidth: 1,
+                        fill: '#177217',
+                        stroke: '#006400'
+                    }
+                }
+            }
+        };
+        if(this.options['theme'] == 'dark'){
+            def.options.colors = noPrice ? ['#FCEC0F']: ['#47C2FF', '#FCEC0F', '#DEDEDE'];
+            def.options.titleTextStyle = {color: '#DEDEDE'};
+            def.options.backgroundColor = {fill: 'transparent'};
+
+            def.options.hAxis.textStyle = {color: '#DEDEDE'};
+            def.options.hAxis.titleTextStyle.color = '#DEDEDE';
+            def.options.hAxis.baselineColor = '#DEDEDE';
+
+            def.options.vAxis.textStyle = {color: '#DEDEDE'};
+            def.options.vAxis.titleTextStyle.color = '#DEDEDE';
+            def.options.vAxis.baselineColor = 'none';
+        }
+        def.options = $.extend(true, def.options, this.options['options']);
+        var chart = new google.visualization.ChartWrapper(def);
+
+        // draw chart
+        dashboard.bind(control, chart);
+        dashboard.draw(data);
+    };
+
+    this.init = function(){
+        this.el.addClass('ethplorer-widget');
+        this.el.addClass('widget-tokenHistoryGrouped');
+        this.el.addClass('theme-' + (this.options.theme ? this.options.theme : 'ethplorer'));
+        this.el.html(this.templates.loader);
+    };
+
+    this.getRequestParams = function(additionalParams){
+        var requestOptions = ['period', 'address', 'showTx', 'type', 'theme'];
+        var params = {
+            apiKey: 'ethplorer.widget'
+        };
+        //if('undefined' === typeof(this.pathReported)){
+            params['domain'] = document.location.href;
+            this.pathReported = true;
+        //}
+        for(var key in this.options){
+            if(requestOptions.indexOf(key) >= 0){
+                params[key] = this.options[key];
+            }
+        }
+        if('object' === typeof(additionalParams)){
+            for(var key in additionalParams){
+                if(requestOptions.indexOf(key) >= 0){
+                    params[key] = additionalParams[key];
+                }
+            }
+        }
+        return params;
+    };
+
+    this.refreshWidget = function(obj){
+        return function(data){
+            if(data && !data.error && data.history && !(('undefined' === typeof(data.history['volume']) && 'undefined' === typeof(data.history['txs'])))){
+                //console.log(data);
+                obj.widgetData = data.history;
+                obj.el.find('.txs-loading').remove();
+                obj.drawChart(data.history);
+                if(!obj.reloadData || obj.addEthplorerLink){
+                    ethplorerWidget.appendEthplorerLink(obj);
+                    obj.addEthplorerLink = false;
+                }
+                if('function' === typeof(obj.options.onLoad)){
+                    obj.options.onLoad();
+                }
+                if(obj.reloadData) obj.el.fadeOut(250, () => {obj.el.fadeIn(150);});
+                setTimeout(ethplorerWidget.fixTilda, 300);
+            }else{
+                if(obj.reloadData){
+                    obj.widgetData = null;
+                    obj.el.html('<div class="txs-loading" style="margin-bottom: 0px !important;margin-top: 0px !important;"></div>');
+                }else{
+                    obj.el.html(obj.templates.loader);
+                }
+                obj.el.find('.txs-loading').text('No data for chart');
+                if(!obj.reloadData){
+                    $('.ethplorer-widget').css('min-height', '1px');
+                    $('.txs-loading').css('min-height', '1px');
+                    $('.txs-loading').css('padding-top', '10px');
+                }else{
+                    obj.addEthplorerLink = true;
+                    $('.ethplorer-widget').css('height', '300px');
+                    $('.txs-loading').css('height', '300px');
+                    $('.txs-loading').css('padding-top', '80px');
+                }
+            }
+            obj.reloadData = false;
+        };
+    }(this);
+
+    $(window).resize(this, function(){
+        var newWidth = $(window).width();
+        var obj = arguments[0].data;
+        if(newWidth !== obj.cachedWidth){
+            obj.cachedWidth = newWidth;
+        }else{
+            return;
+        }
         if(obj.resizeTimer) clearTimeout(obj.resizeTimer);
         obj.resizeTimer = setTimeout(function(){
             if(obj.widgetData){
@@ -796,8 +2594,12 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
     });
 
     this.init();
-    ethplorerWidget.chartWidgets.push(this);
+    ethplorerWidget.chartControlWidgets.push(this);
 };
+
+if('undefined' !== typeof(ethplorerWidgetPreload)){
+    ethplorerWidget.preloadData(ethplorerWidgetPreload);
+}
 
 /**
  * Document on ready widgets initialization.
@@ -814,6 +2616,10 @@ ethplorerWidget.Type['tokenHistoryGrouped'] = function(element, options, templat
         if(ethplorerWidget.addGoogleLoader){
             ethplorerWidget.addGoogleLoader = false;
             ethplorerWidget.loadScript("https://www.gstatic.com/charts/loader.js", ethplorerWidget.loadGoogleCharts);
+        }
+        if(ethplorerWidget.addGoogleAPI){
+            ethplorerWidget.addGoogleAPI = false;
+            ethplorerWidget.loadScript("https://www.google.com/jsapi", ethplorerWidget.loadGoogleControlCharts);
         }
     }
     // add widget css
